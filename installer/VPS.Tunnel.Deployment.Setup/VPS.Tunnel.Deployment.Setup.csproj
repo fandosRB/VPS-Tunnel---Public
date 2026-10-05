@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>VPS-Tunnel-Setup</AssemblyName>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\VPS.Tunnel.App\Icons\vps-tunnel.ico</ApplicationIcon>
+    <Version>1.1.1</Version>
+    <!-- build-installer.ps1 publishes the GUI and the service from source into these folders. -->
+    <PayloadGuiDir>$(MSBuildThisFileDirectory)..\stage\gui</PayloadGuiDir>
+    <PayloadServiceDir>$(MSBuildThisFileDirectory)..\stage\service</PayloadServiceDir>
+    <SingBoxDir>C:\sing-box\sing-box-1.14.1-windows-amd64</SingBoxDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Program files only: no debug symbols, and never a connection configuration. -->
+    <EmbeddedResource Include="$(PayloadGuiDir)\**\*" Exclude="$(PayloadGuiDir)\**\*.pdb"
+      LogicalName="payload/gui/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension)" />
+    <EmbeddedResource Include="$(PayloadServiceDir)\**\*" Exclude="$(PayloadServiceDir)\**\*.pdb"
+      LogicalName="payload/service/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension)" />
+    <EmbeddedResource Include="$(SingBoxDir)\**\*" Exclude="$(SingBoxDir)\**\config*.json"
+      LogicalName="payload/sing-box/sing-box-1.14.1-windows-amd64/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

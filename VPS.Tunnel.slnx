@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="VPS.Tunnel.App/VPS.Tunnel.App.csproj" />
+  <Project Path="VPS.Tunnel.Core/VPS.Tunnel.Core.csproj" />
+  <Project Path="VPS.Tunnel.Service/VPS.Tunnel.Service.csproj" />
+  <Project Path="VPS.Tunnel.Service.Tests/VPS.Tunnel.Service.Tests.csproj" />
+  <Project Path="VPS.Tunnel.App.Tests/VPS.Tunnel.App.Tests.csproj" />
+</Solution>

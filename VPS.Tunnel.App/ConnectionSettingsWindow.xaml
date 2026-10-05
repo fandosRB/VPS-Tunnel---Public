@@ -1,0 +1,74 @@
+<Window x:Class="VPS.Tunnel.App.ConnectionSettingsWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Подключение к серверу" Width="520" Height="720" MinWidth="440" MinHeight="520"
+ WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="CanResize"
+ Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}"
+ FontFamily="{StaticResource AppFont}" FontSize="13" UseLayoutRounding="True">
+ <Window.Resources>
+  <Style x:Key="LabelStyle" TargetType="TextBlock" BasedOn="{StaticResource SecondaryTextStyle}">
+   <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,12,0"/>
+  </Style>
+ </Window.Resources>
+ <Grid Margin="18">
+  <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+   <StackPanel>
+    <TextBlock Text="Подключение к серверу" Style="{StaticResource SectionTitle}"/>
+    <TextBlock x:Name="WelcomeText" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,6,0,0"
+     Text="Добро пожаловать! Чтобы пользоваться VPS Tunnel, укажите свой сервер VLESS + Reality."/>
+    <TextBlock Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" Margin="0,6,0,12"
+     Text="Вставьте ссылку vless://… из панели вашего сервера (3x-ui, Marzban, Hiddify и др.) — поля ниже заполнятся сами."/>
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <TextBox x:Name="LinkBox" Style="{StaticResource FieldStyle}" TextChanged="LinkBox_TextChanged" AutomationProperties.Name="Ссылка vless"/>
+     <Button Grid.Column="1" Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" Click="Paste_Click"><TextBlock Text="Вставить" Margin="12,0"/></Button>
+    </Grid>
+    <TextBlock x:Name="LinkStatus" Style="{StaticResource SecondaryTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+
+    <TextBlock Text="Или заполните вручную" Style="{StaticResource SectionTitle}" FontSize="13" Margin="0,18,0,8"/>
+    <Grid x:Name="Fields">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="140"/><ColumnDefinition/></Grid.ColumnDefinitions>
+     <Grid.RowDefinitions>
+      <RowDefinition Height="40"/><RowDefinition Height="40"/><RowDefinition Height="40"/><RowDefinition Height="40"/><RowDefinition Height="40"/>
+      <RowDefinition Height="40"/><RowDefinition Height="40"/><RowDefinition Height="40"/><RowDefinition Height="40"/>
+     </Grid.RowDefinitions>
+     <TextBlock Text="Название" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="NameBox" Grid.Column="1" Style="{StaticResource FieldStyle}" ToolTip="Как сервер будет подписан в программе"/>
+     <TextBlock Grid.Row="1" Text="Адрес сервера" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="ServerBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldStyle}" ToolTip="IP или домен"/>
+     <TextBlock Grid.Row="2" Text="Порт" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="PortBox" Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldStyle}" Text="443" Width="100" HorizontalAlignment="Left"/>
+     <TextBlock Grid.Row="3" Text="UUID" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="UuidBox" Grid.Row="3" Grid.Column="1" Style="{StaticResource FieldStyle}"/>
+     <TextBlock Grid.Row="4" Text="SNI (sni)" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="SniBox" Grid.Row="4" Grid.Column="1" Style="{StaticResource FieldStyle}" ToolTip="Сайт для маскировки, например www.microsoft.com"/>
+     <TextBlock Grid.Row="5" Text="Public key (pbk)" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="PublicKeyBox" Grid.Row="5" Grid.Column="1" Style="{StaticResource FieldStyle}"/>
+     <TextBlock Grid.Row="6" Text="Short ID (sid)" Style="{StaticResource LabelStyle}"/>
+     <TextBox x:Name="ShortIdBox" Grid.Row="6" Grid.Column="1" Style="{StaticResource FieldStyle}"/>
+     <TextBlock Grid.Row="7" Text="Отпечаток (fp)" Style="{StaticResource LabelStyle}"/>
+     <ComboBox x:Name="FingerprintBox" Grid.Row="7" Grid.Column="1" Style="{StaticResource FluentComboBoxStyle}" Width="160" HorizontalAlignment="Left"/>
+     <TextBlock Grid.Row="8" Text="Flow" Style="{StaticResource LabelStyle}"/>
+     <ComboBox x:Name="FlowBox" Grid.Row="8" Grid.Column="1" Style="{StaticResource FluentComboBoxStyle}" Width="160" HorizontalAlignment="Left">
+      <ComboBoxItem Content="xtls-rprx-vision"/><ComboBoxItem Content="нет"/>
+     </ComboBox>
+    </Grid>
+
+    <TextBlock Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" Margin="0,14,0,0"
+     Text="Ключи сохраняются только в C:\sing-box\config.json — доступ к нему есть лишь у системы и администраторов. Для сохранения Windows попросит разрешение."/>
+    <TextBlock x:Name="KeepHint" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"
+     Text="Сохранённые ключи здесь не показываются. Оставьте поля пустыми, чтобы изменить только название."/>
+    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+     <Button Style="{StaticResource TextButtonStyle}" Click="Import_Click" ToolTip="Для опытных: готовая конфигурация sing-box с TUN-входом"><TextBlock Text="Импорт config.json…" Margin="12,0"/></Button>
+    </StackPanel>
+    <TextBlock x:Name="ImportStatus" Style="{StaticResource SecondaryTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+   </StackPanel>
+  </ScrollViewer>
+  <TextBlock x:Name="ErrorText" Grid.Row="1" Foreground="#D9534F" TextWrapping="Wrap" Margin="0,10,0,0" Visibility="Collapsed"/>
+  <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+   <Button Style="{StaticResource TextButtonStyle}" IsCancel="True"><TextBlock Text="Отмена" Margin="16,0"/></Button>
+   <Button Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" Click="Save_Click" Background="{DynamicResource AccentBrush}" BorderBrush="{DynamicResource AccentBrush}"><TextBlock Text="Сохранить" Margin="16,0" Foreground="{DynamicResource WhiteBrush}"/></Button>
+  </StackPanel>
+ </Grid>
+</Window>

@@ -1,0 +1,54 @@
+<Window x:Class="VPS.Tunnel.App.SelectiveAppsWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Программы для SELECTIVE" Width="460" Height="540" MinWidth="420" MinHeight="420"
+ WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="CanResize"
+ Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}"
+ FontFamily="{StaticResource AppFont}" FontSize="13" UseLayoutRounding="True">
+ <Grid Margin="18">
+  <Grid.RowDefinitions>
+   <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+  </Grid.RowDefinitions>
+  <StackPanel Margin="0,0,0,12">
+   <TextBlock Text="Программы для SELECTIVE" Style="{StaticResource SectionTitle}"/>
+   <TextBlock Text="Через VPS пойдёт только трафик этих программ, всё остальное — напрямую." Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+   <CheckBox x:Name="WslCheck" Content="Весь WSL (Ubuntu) через VPS" Style="{StaticResource FluentToggleStyle}" Margin="0,10,0,0"
+    ToolTip="Все программы в WSL пойдут через VPS. Работает при стандартной (NAT) настройке сети WSL."/>
+  </StackPanel>
+  <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="4">
+   <Grid>
+    <ListBox x:Name="AppList" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextBrush}"
+     HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Список программ">
+     <ListBox.ItemTemplate>
+      <DataTemplate>
+       <Grid Height="30">
+        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0" TextTrimming="CharacterEllipsis"/>
+        <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}" Width="28" Height="26" Click="Remove_Click" Tag="{Binding}" ToolTip="Удалить" AutomationProperties.Name="Удалить">
+         <Path Data="{StaticResource CloseIcon}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2" Width="10" Height="10" Stretch="Uniform"/>
+        </Button>
+       </Grid>
+      </DataTemplate>
+     </ListBox.ItemTemplate>
+    </ListBox>
+    <TextBlock x:Name="EmptyHint" Text="Список пуст. Добавьте программу ниже." Style="{StaticResource SecondaryTextStyle}" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
+   </Grid>
+  </Border>
+  <Grid Grid.Row="2" Margin="0,12,0,0">
+   <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <TextBox x:Name="NameBox" Style="{StaticResource FieldStyle}" KeyDown="NameBox_KeyDown" AutomationProperties.Name="Имя файла программы" ToolTip="Например: chrome.exe или Telegram.exe"/>
+   <Button Grid.Column="1" Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" Click="Add_Click"><TextBlock Text="Добавить" Margin="14,0"/></Button>
+  </Grid>
+  <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">
+   <Button Style="{StaticResource TextButtonStyle}" Click="Installed_Click"><TextBlock Text="Из установленных…" Margin="12,0"/></Button>
+   <Button Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" Click="Running_Click"><TextBlock Text="Из запущенных…" Margin="12,0"/></Button>
+   <Button Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" Click="Browse_Click"><TextBlock Text="Файл…" Margin="12,0"/></Button>
+  </StackPanel>
+  <TextBlock x:Name="ErrorText" Grid.Row="4" Foreground="#D9534F" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
+  <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+   <Button Style="{StaticResource TextButtonStyle}" IsCancel="True"><TextBlock Text="Отмена" Margin="16,0"/></Button>
+   <Button Style="{StaticResource TextButtonStyle}" Margin="8,0,0,0" IsDefault="False" Click="Save_Click" Background="{DynamicResource AccentBrush}" BorderBrush="{DynamicResource AccentBrush}"><TextBlock Text="Сохранить" Margin="16,0" Foreground="{DynamicResource WhiteBrush}"/></Button>
+  </StackPanel>
+ </Grid>
+</Window>
