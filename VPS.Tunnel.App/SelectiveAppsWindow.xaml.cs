@@ -8,21 +8,44 @@ using VPS.Tunnel.Core;
 
 namespace VPS.Tunnel.App;
 
+/// <summary>
+/// Edits a program list: SELECTIVE (executable names that go through the VPS, plus WSL) or
+/// EXCLUDE (full paths, or names, of programs that bypass the tunnel).
+/// </summary>
 public partial class SelectiveAppsWindow : Window
 {
     private readonly ObservableCollection<string> _applications;
+    private readonly bool _exclude;
 
-    public SelectiveAppsWindow(SelectiveRequest current)
+    public SelectiveAppsWindow(SelectiveRequest current) : this(SelectiveApplications.Normalize(current.Applications), exclude: false)
+    {
+        WslCheck.IsChecked = current.IncludeWsl;
+    }
+
+    public SelectiveAppsWindow(IReadOnlyList<string> excluded) : this(ExcludedApplications.Normalize(excluded), exclude: true) { }
+
+    private SelectiveAppsWindow(List<string> entries, bool exclude)
     {
         InitializeComponent();
-        _applications = new(SelectiveApplications.Normalize(current.Applications));
-        WslCheck.IsChecked = current.IncludeWsl;
+        _exclude = exclude;
+        _applications = new(entries);
         _applications.CollectionChanged += (_, _) => UpdateEmptyHint();
         AppList.ItemsSource = _applications;
+        if (exclude)
+        {
+            Title = HeaderText.Text = "Исключения: программы напрямую";
+            DescriptionText.Text = "Весь трафик идёт через VPS, а эти программы — напрямую, мимо туннеля. " +
+                "Указывайте полный путь к .exe: у разных программ бывают одинаковые имена файлов. " +
+                "Программы, которые запускает выбранная, нужно добавить отдельно.";
+            WslCheck.Visibility = Visibility.Collapsed;
+            NameHint.Text = "Полный путь к .exe";
+            NameBox.ToolTip = "Полный путь к .exe или имя файла";
+        }
         UpdateEmptyHint();
     }
 
     public SelectiveRequest Result => new(_applications.ToList(), WslCheck.IsChecked == true);
+    public IReadOnlyList<string> ExcludedEntries => _applications.ToList();
 
     private void Add_Click(object sender, RoutedEventArgs e) => AddFromBox();
 
@@ -33,6 +56,9 @@ public partial class SelectiveAppsWindow : Window
         AddFromBox();
     }
 
+    private void NameBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        NameHint.Visibility = NameBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
     private void AddFromBox()
     {
         if (TryAdd(NameBox.Text)) NameBox.Clear();
@@ -41,16 +67,25 @@ public partial class SelectiveAppsWindow : Window
 
     private bool TryAdd(string? input)
     {
-        var name = Path.GetFileName(input?.Trim().Trim('"') ?? "");
-        if (name.Length > 0 && !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name += ".exe";
-        if (!SelectiveApplications.IsValidName(name))
-            return ShowError("Укажите имя файла программы, например chrome.exe.");
-        if (_applications.Contains(name, StringComparer.OrdinalIgnoreCase))
-            return ShowError(name + " уже в списке.");
-        if (_applications.Count >= SelectiveApplications.MaxCount)
-            return ShowError($"Можно добавить не больше {SelectiveApplications.MaxCount} программ.");
-        _applications.Add(name);
-        ErrorText.Visibility = Visibility.Collapsed;
+        var text = input?.Trim().Trim('"').Trim() ?? "";
+        // SELECTIVE matches by file name; EXCLUDE keeps the full path when one is given.
+        var entry = _exclude && text.Contains('\\') ? text : Path.GetFileName(text);
+        if (entry.Length > 0 && !entry.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) entry += ".exe";
+        var valid = _exclude ? ExcludedApplications.IsValidEntry(entry) : SelectiveApplications.IsValidName(entry);
+        if (!valid)
+            return ShowError(_exclude
+                ? "Укажите полный путь к .exe или имя файла."
+                : "Укажите имя файла программы, например chrome.exe.");
+        if (_applications.Contains(entry, StringComparer.OrdinalIgnoreCase))
+            return ShowError(entry + " уже в списке.");
+        var max = _exclude ? ExcludedApplications.MaxCount : SelectiveApplications.MaxCount;
+        if (_applications.Count >= max)
+            return ShowError($"Можно добавить не больше {max} программ.");
+        _applications.Add(entry);
+        if (_exclude && ExcludedApplications.IsPath(entry) && !File.Exists(entry))
+            ShowError("Файл не найден: " + entry + ". Пока его нет, при включении режима он будет пропущен.");
+        else
+            ErrorText.Visibility = Visibility.Collapsed;
         return true;
     }
 
@@ -84,7 +119,7 @@ public partial class SelectiveAppsWindow : Window
 
     private void Pick(bool running)
     {
-        var picker = new AppPickerWindow(running, _applications) { Owner = this };
+        var picker = new AppPickerWindow(running, _applications, usePaths: _exclude) { Owner = this };
         if (picker.ShowDialog() != true) return;
         foreach (var name in picker.Selected) TryAdd(name);
     }

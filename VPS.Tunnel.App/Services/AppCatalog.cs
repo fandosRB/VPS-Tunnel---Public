@@ -10,10 +10,13 @@ using VPS.Tunnel.Core;
 
 namespace VPS.Tunnel.App.Services;
 
-public sealed class AppChoice(string displayName, string executableName, ImageSource? icon)
+public sealed class AppChoice(string displayName, string executableName, ImageSource? icon, string? path = null)
 {
     public string DisplayName { get; } = displayName;
     public string ExecutableName { get; } = executableName;
+    /// <summary>Full path of the .exe when known (protected processes may hide it).</summary>
+    public string? Path { get; } = path;
+    public string Detail => Path ?? ExecutableName;
     public ImageSource? Icon { get; } = icon;
     public bool IsSelected { get; set; }
 }
@@ -34,9 +37,10 @@ public static class AppCatalog
         void Add(string displayName, string executablePath)
         {
             var executable = Path.GetFileName(executablePath);
+            // Keyed by path: two installed programs can share an .exe name but must stay separate entries.
             if (IsUninstaller(displayName, executablePath) || !SelectiveApplications.IsValidName(executable) ||
-                !seen.Add(executable)) return;
-            result.Add(new AppChoice(displayName, executable, LoadIcon(executablePath)));
+                !seen.Add(executablePath)) return;
+            result.Add(new AppChoice(displayName, executable, LoadIcon(executablePath), executablePath));
         }
         foreach (var (name, path) in ShortcutApps()) Add(name, path);
         foreach (var (name, path) in PackagedApps()) Add(name, path);
@@ -189,7 +193,7 @@ public static class AppCatalog
                 {
                     if (process.Id == Environment.ProcessId || process.MainWindowHandle == IntPtr.Zero) continue;
                     var executable = process.ProcessName + ".exe";
-                    if (!SelectiveApplications.IsValidName(executable) || !seen.Add(executable)) continue;
+                    if (!SelectiveApplications.IsValidName(executable)) continue;
                     string? path = null;
                     string? description = null;
                     try
@@ -198,8 +202,9 @@ public static class AppCatalog
                         description = process.MainModule?.FileVersionInfo.FileDescription;
                     }
                     catch (Win32Exception) { } // elevated or protected process: name only
+                    if (!seen.Add(path ?? executable)) continue;
                     result.Add(new AppChoice(string.IsNullOrWhiteSpace(description) ? process.ProcessName : description.Trim(),
-                        executable, path == null ? null : LoadIcon(path)));
+                        executable, path == null ? null : LoadIcon(path), path));
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or Win32Exception) { }
             }

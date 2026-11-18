@@ -1,8 +1,8 @@
 namespace VPS.Tunnel.Core;
 
-public enum TunnelMode { Direct, Selective, Tunnel }
-public enum ConnectionState { Unknown, Direct, Connecting, Tunnel, TunnelActiveRouteConflict, Disconnecting, Error, Selective }
-public enum StartupMode { Direct, LastMode, Tunnel, Selective }
+public enum TunnelMode { Direct, Selective, Tunnel, Exclude }
+public enum ConnectionState { Unknown, Direct, Connecting, Tunnel, TunnelActiveRouteConflict, Disconnecting, Error, Selective, Exclude }
+public enum StartupMode { Direct, LastMode, Tunnel, Selective, Exclude }
 public enum ThemePreference { System, Light, Dark }
 
 public sealed class AppSettings
@@ -14,6 +14,8 @@ public sealed class AppSettings
     public ThemePreference Theme { get; set; } = ThemePreference.System;
     public List<string> SelectiveApplications { get; set; } = [];
     public bool SelectiveIncludeWsl { get; set; }
+    /// <summary>EXCLUDE list: full paths (or bare names) of programs that bypass the tunnel.</summary>
+    public List<string> ExcludedApplications { get; set; } = [];
     /// <summary>Server name shown in the GUI. Secrets live only in C:\sing-box\config.json.</summary>
     public string? ServerDisplayName { get; set; }
     /// <summary>Public IP the tunnel is expected to exit from; null until known.</summary>
@@ -30,6 +32,7 @@ public static class StartupBehavior
     {
         StartupMode.Tunnel => TunnelMode.Tunnel,
         StartupMode.Selective => TunnelMode.Selective,
+        StartupMode.Exclude => TunnelMode.Exclude,
         StartupMode.LastMode => settings.LastSelectedMode,
         _ => TunnelMode.Direct
     };
@@ -45,7 +48,8 @@ public static class StartupBehavior
     public static bool ShouldRememberSelection(TunnelMode selected, ConnectionState result) =>
         selected == TunnelMode.Direct && result == ConnectionState.Direct ||
         selected == TunnelMode.Tunnel && result == ConnectionState.Tunnel ||
-        selected == TunnelMode.Selective && result == ConnectionState.Selective;
+        selected == TunnelMode.Selective && result == ConnectionState.Selective ||
+        selected == TunnelMode.Exclude && result == ConnectionState.Exclude;
 }
 
 public static class TrayBehavior
@@ -61,7 +65,8 @@ public sealed record ConnectionSnapshot(
     string? Error,
     DateTimeOffset? ConnectedAt,
     TrafficCounters? Traffic,
-    int? SingBoxPid);
+    int? SingBoxPid,
+    string? Notice = null);
 
 public interface INetworkStatusService
 {

@@ -11,7 +11,7 @@ internal static class Program
 {
     private const string ServiceName = "VpsTunnelService";
     internal const string ProductName = "VPS Tunnel";
-    internal const string ProductVersion = "1.1.1";
+    internal const string ProductVersion = "1.2.0";
     private const string RuntimeDownload = "https://dotnet.microsoft.com/download/dotnet/10.0";
     private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\VPS Tunnel";
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -82,6 +82,7 @@ internal static class Program
         // C:\sing-box holds config.json with the keys: SYSTEM and Administrators only. The engine
         // folder has no secrets and stays readable, e.g. for building the installer without elevation.
         ProtectDirectory(EngineDirectory, false);
+        AllowUsersToListFolder(EngineDirectory);
         ProtectDirectory(EngineVersionDirectory, true);
         ProtectDirectory(LogDirectory, false);
         ProtectTree(AppDirectory);
@@ -319,6 +320,21 @@ internal static class Program
             }
         if (Directory.Exists(EngineDirectory) && !Directory.EnumerateFileSystemEntries(EngineDirectory).Any())
             Directory.Delete(EngineDirectory);
+    }
+
+    /// <summary>
+    /// Lets the unelevated GUI see that C:\sing-box\config.json exists (folder listing implies reading
+    /// file attributes), so an update never asks for the connection again. The file itself stays
+    /// readable only by SYSTEM and Administrators.
+    /// </summary>
+    private static void AllowUsersToListFolder(string path)
+    {
+        var directory = new DirectoryInfo(path);
+        var security = directory.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
+            FileSystemRights.ListDirectory | FileSystemRights.ReadAttributes | FileSystemRights.Traverse | FileSystemRights.Synchronize,
+            InheritanceFlags.None, PropagationFlags.None, AccessControlType.Allow));
+        directory.SetAccessControl(security);
     }
 
     private static void ProtectDirectory(string path, bool allowUsersRead)

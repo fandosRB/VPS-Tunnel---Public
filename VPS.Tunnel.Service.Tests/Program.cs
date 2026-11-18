@@ -290,6 +290,126 @@ await Case("imported configs must be sing-box JSON with a TUN inbound", async ()
     await Task.CompletedTask;
 });
 
+
+const string ExcludedApp = @"C:\Program Files\Example App\app.exe";
+
+await Case("exclude start checks and runs the derived configuration", async () =>
+{
+    var test = new Fixture { Writer = { Missing = [@"C:\Gone\old.exe"] } };
+    test.Arguments.Set(["VpsTunnelService", "--exclude", ExcludedApp, "Telegram.exe"]);
+    await test.Service.StartAsync(CancellationToken.None);
+    Check(test.Runner.ConfigurationPath == FakeWriter.ExcludePath &&
+        test.Writer.Exclude!.Entries.SequenceEqual([ExcludedApp, "Telegram.exe"]) &&
+        test.Checker.Checked.SequenceEqual([FakeWriter.ExcludePath]) &&
+        test.Log.Events.Contains("ExcludeModeRequested") && test.Log.Events.Contains("ExcludedProgramMissing") &&
+        test.Status.Error == null, "exclude start");
+    await test.Service.StopAsync(CancellationToken.None);
+});
+
+await Case("plain TUNNEL start is not re-checked", async () =>
+{
+    var test = new Fixture();
+    await test.Service.StartAsync(CancellationToken.None);
+    Check(test.Checker.Checked.Count == 0 && test.Status.Error == null, "base config untouched");
+    await test.Service.StopAsync(CancellationToken.None);
+});
+
+await Case("sing-box check failure starts nothing and leaves a reason for the GUI", async () =>
+{
+    var test = new Fixture { Checker = { Error = "FATAL decode config: unknown field" } };
+    test.Arguments.Set(["--exclude", ExcludedApp]);
+    await Throws<ConfigurationCheckException>(() => test.Service.StartAsync(CancellationToken.None));
+    Check(test.Runner.StartCount == 0 &&
+        test.Status.Error == "Конфигурация не прошла проверку sing-box: FATAL decode config: unknown field", "check failure");
+});
+
+await Case("exclude with no existing program starts nothing", async () =>
+{
+    var test = new Fixture { Writer = { Fail = true } };
+    test.Arguments.Set(["--exclude", ExcludedApp]);
+    await Throws<InvalidDataException>(() => test.Service.StartAsync(CancellationToken.None));
+    Check(test.Runner.StartCount == 0 && test.Status.Error!.StartsWith("Ни одна программа"), "nothing to exclude");
+});
+
+await Case("exclude arguments are validated", async () =>
+{
+    foreach (var bad in new[] { @"Program Files\x.exe", @"C:\a\..\x.exe", @"C:\a\*.exe", @"C:\a\x.dll", @"\\server\share\x.exe", "x.exe ", "" })
+    {
+        var test = new Fixture();
+        test.Arguments.Set(["--exclude", bad]);
+        await Throws<ArgumentException>(() => test.Service.StartAsync(CancellationToken.None));
+        Check(test.Runner.StartCount == 0 && test.Writer.Calls == 0, "rejected: " + bad);
+    }
+    var both = new Fixture();
+    both.Arguments.Set(["--selective", "chrome.exe", "--exclude", ExcludedApp]);
+    await Throws<ArgumentException>(() => both.Service.StartAsync(CancellationToken.None));
+    Check(ExcludedApplications.IsValidEntry(ExcludedApp) && ExcludedApplications.IsValidEntry("app.exe") &&
+        ExcludedApplications.Normalize([" \"" + ExcludedApp + "\" ", ExcludedApp.ToUpperInvariant(), "bad"]).SequenceEqual([ExcludedApp]) &&
+        ExcludedApplications.ParseStartArguments(ExcludedApplications.ToStartArguments(new ExcludeRequest([ExcludedApp])))!
+            .Entries.SequenceEqual([ExcludedApp]), "valid entries");
+});
+
+await Case("exclude builder: programs direct after sniff/hijack-dns, everything else to the proxy", async () =>
+{
+    var config = """
+        {
+          "dns": { "servers": [ { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+                                { "type": "local", "tag": "local-dns" } ],
+                   "rules": [ { "domain_suffix": ["example.com"], "server": "remote-dns" } ], "final": "remote-dns" },
+          "inbounds": [{ "type": "tun", "address": ["172.19.0.1/30"], "auto_route": true, "strict_route": true }],
+          "outbounds": [{ "type": "vless", "tag": "proxy" }, { "type": "direct", "tag": "direct" }],
+          "route": { "rules": [ { "action": "sniff" }, { "protocol": "dns", "action": "hijack-dns" },
+                                { "ip_is_private": true, "outbound": "direct" } ], "final": "proxy" }
+        }
+        """;
+    var root = JsonNode.Parse(ExcludeConfigBuilder.Build(config, new ExcludeRequest([ExcludedApp, "Telegram.exe"])))!;
+    var rules = root["route"]!["rules"]!.AsArray();
+    var dnsRules = root["dns"]!["rules"]!.AsArray();
+    Check(rules.Count == 5 && rules[0]!["action"]!.GetValue<string>() == "sniff" &&
+        rules[1]!["action"]!.GetValue<string>() == "hijack-dns" &&
+        rules[2]!["process_path"]![0]!.GetValue<string>() == ExcludedApp && rules[2]!["outbound"]!.GetValue<string>() == "direct" &&
+        rules[2]!["network"] == null &&
+        rules[3]!["process_name"]![0]!.GetValue<string>() == "Telegram.exe" &&
+        rules[4]!["ip_is_private"] != null &&
+        root["route"]!["final"]!.GetValue<string>() == "proxy" && root["route"]!["auto_detect_interface"]!.GetValue<bool>() &&
+        dnsRules.Count == 3 && dnsRules[0]!["process_path"]![0]!.GetValue<string>() == ExcludedApp &&
+        dnsRules[0]!["server"]!.GetValue<string>() == "local-dns" && dnsRules[1]!["process_name"] != null &&
+        root["dns"]!["servers"]!.AsArray().Count == 2, "exclude rules");
+    await Task.CompletedTask;
+});
+
+await Case("exclude builder adds missing direct outbound and local DNS server", async () =>
+{
+    var config = """
+        { "dns": { "servers": [ { "type": "https", "tag": "remote-dns", "server": "1.1.1.1" } ] },
+          "outbounds": [{ "type": "vless", "tag": "vps" }], "route": { "final": "vps" } }
+        """;
+    var root = JsonNode.Parse(ExcludeConfigBuilder.Build(config, new ExcludeRequest([ExcludedApp])))!;
+    var outbounds = root["outbounds"]!.AsArray();
+    var servers = root["dns"]!["servers"]!.AsArray();
+    Check(outbounds.Count == 2 && outbounds[1]!["tag"]!.GetValue<string>() == SelectiveConfigBuilder.AddedDirectTag &&
+        root["route"]!["rules"]![0]!["outbound"]!.GetValue<string>() == SelectiveConfigBuilder.AddedDirectTag &&
+        root["route"]!["final"]!.GetValue<string>() == "vps" &&
+        servers.Count == 2 && servers[1]!["type"]!.GetValue<string>() == "local" &&
+        root["dns"]!["rules"]![0]!["server"]!.GetValue<string>() == ExcludeConfigBuilder.AddedLocalDnsTag &&
+        root["route"]!["default_domain_resolver"]!.GetValue<string>() == "remote-dns", "added pieces");
+    var noDns = JsonNode.Parse(ExcludeConfigBuilder.Build(
+        """{ "outbounds": [{ "type": "vless", "tag": "proxy" }, { "type": "direct", "tag": "direct" }] }""",
+        new ExcludeRequest(["app.exe"])))!;
+    Check(noDns["dns"] == null && noDns["route"]!["final"]!.GetValue<string>() == "proxy", "no dns section");
+    await Task.CompletedTask;
+});
+
+await Case("exclude config from the built-in template", async () =>
+{
+    var template = SingBoxConfigTemplate.Build(VlessLink.Parse(Link));
+    var root = JsonNode.Parse(ExcludeConfigBuilder.Build(template, new ExcludeRequest([ExcludedApp])))!;
+    Check(root["route"]!["rules"]![2]!["process_path"] != null &&
+        root["route"]!["final"]!.GetValue<string>() == SingBoxConfigTemplate.ProxyTag &&
+        root["dns"]!["rules"]![0]!["server"]!.GetValue<string>() == "local-dns", "template exclude");
+    await Task.CompletedTask;
+});
+
 Console.WriteLine($"PASS: {passed} service tests; fake child only, no sing-box or TUN started");
 
 async Task Case(string name, Func<Task> action)
@@ -321,9 +441,11 @@ sealed class Fixture
     public TaskCompletionSource ApplicationStopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public ServiceStartArguments Arguments { get; } = new();
     public FakeWriter Writer { get; } = new();
+    public FakeChecker Checker { get; } = new();
+    public FakeStatus Status { get; } = new();
     public TunnelServiceLifecycle Service => _service ??= new(Files, Runner, Log,
         () => ApplicationStopped.TrySetResult(), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(100),
-        Arguments, Writer);
+        Arguments, Writer, Checker, Status);
     private TunnelServiceLifecycle? _service;
 }
 
@@ -358,6 +480,35 @@ sealed class FakeWriter : ISelectiveConfigurationWriter
         if (Fail) throw new InvalidDataException("Proxy outbound not found.");
         return Path;
     }
+
+    public const string ExcludePath = @"C:\Program Files\VPS Tunnel\Service\Runtime\exclude-config.json";
+    public ExcludeRequest? Exclude { get; private set; }
+    public IReadOnlyList<string> Missing { get; set; } = [];
+    public ExcludeWriteResult WriteExclude(ExcludeRequest request)
+    {
+        Calls++;
+        Exclude = request;
+        if (Fail) throw new InvalidDataException("Ни одна программа из списка исключений не найдена на диске.");
+        return new(ExcludePath, Missing);
+    }
+}
+
+sealed class FakeChecker : IConfigurationChecker
+{
+    public string? Error { get; set; }
+    public List<string> Checked { get; } = [];
+    public void Check(string configurationPath)
+    {
+        Checked.Add(configurationPath);
+        if (Error != null) throw new ConfigurationCheckException(Error);
+    }
+}
+
+sealed class FakeStatus : IServiceStatusFile
+{
+    public string? Error { get; private set; } = "stale";
+    public void WriteStartError(string message) => Error = message;
+    public void Clear() => Error = null;
 }
 
 sealed class FakeChild : IManagedChild

@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <Geometry x:Key="ShieldIcon">M12,2 L21,6 V12 C21,17 17,21 12,23 C7,21 3,17 3,12 V6 Z M8,12 L11,15 L16,9</Geometry>
  <Geometry x:Key="GlobeIcon">M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 M2,12 H22 M12,2 C18,8 18,16 12,22 C6,16 6,8 12,2</Geometry>
+ <Geometry x:Key="ExcludeIcon">M12,2 L21,6 V12 C21,17 17,21 12,23 C7,21 3,17 3,12 V6 Z M8,12.5 H16</Geometry>
  <Geometry x:Key="AppsIcon">M3,3 H10 V10 H3 Z M14,3 H21 V10 H14 Z M3,14 H10 V21 H3 Z M14,14 H21 V21 H14 Z</Geometry>
  <Geometry x:Key="LocationIcon">M12,23 C10,20 4,14 4,10 A8,8 0 1 1 20,10 C20,14 14,20 12,23 Z M12,7 A3,3 0 1 0 12,13 A3,3 0 1 0 12,7</Geometry>
  <Geometry x:Key="ClockIcon">M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 M12,6 V12 L16,14</Geometry>

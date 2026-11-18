@@ -30,6 +30,22 @@ public interface ISelectiveConfigurationWriter
 {
     /// <summary>Writes the SELECTIVE configuration derived from the base one and returns its path.</summary>
     string Write(SelectiveRequest request);
+    /// <summary>Writes the EXCLUDE configuration; programs whose path does not exist are skipped.</summary>
+    ExcludeWriteResult WriteExclude(ExcludeRequest request);
+}
+
+public sealed record ExcludeWriteResult(string Path, IReadOnlyList<string> Skipped);
+
+public interface IConfigurationChecker
+{
+    /// <summary>Throws <see cref="ConfigurationCheckException"/> when sing-box rejects the file.</summary>
+    void Check(string configurationPath);
+}
+
+public interface IServiceStatusFile
+{
+    void WriteStartError(string message);
+    void Clear();
 }
 
 public interface IManagedChild : IDisposable
@@ -57,6 +73,8 @@ public sealed class TunnelServiceLifecycle
     private readonly Action _stopApplication;
     private readonly ServiceStartArguments _arguments;
     private readonly ISelectiveConfigurationWriter? _selective;
+    private readonly IConfigurationChecker? _checker;
+    private readonly IServiceStatusFile? _status;
     private readonly TimeSpan _graceTimeout;
     private readonly TimeSpan _forcedTimeout;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -68,7 +86,8 @@ public sealed class TunnelServiceLifecycle
 
     public TunnelServiceLifecycle(IFileProbe files, IChildProcessRunner runner, IServiceEventLog log,
         Action stopApplication, TimeSpan? graceTimeout = null, TimeSpan? forcedTimeout = null,
-        ServiceStartArguments? arguments = null, ISelectiveConfigurationWriter? selective = null)
+        ServiceStartArguments? arguments = null, ISelectiveConfigurationWriter? selective = null,
+        IConfigurationChecker? checker = null, IServiceStatusFile? status = null)
     {
         _files = files;
         _runner = runner;
@@ -76,6 +95,8 @@ public sealed class TunnelServiceLifecycle
         _stopApplication = stopApplication;
         _arguments = arguments ?? new ServiceStartArguments();
         _selective = selective;
+        _checker = checker;
+        _status = status;
         _graceTimeout = graceTimeout ?? TimeSpan.FromSeconds(20);
         _forcedTimeout = forcedTimeout ?? TimeSpan.FromSeconds(5);
     }
@@ -98,12 +119,29 @@ public sealed class TunnelServiceLifecycle
 
             var configuration = ConfigurationPath;
             var request = SelectiveApplications.ParseStartArguments(_arguments.Values);
+            var exclude = ExcludedApplications.ParseStartArguments(_arguments.Values);
+            if (request != null && exclude != null) throw new ArgumentException("Both SELECTIVE and EXCLUDE requested.");
             if (request != null)
             {
                 _log.Write(request.IncludeWsl ? "SelectiveModeRequested WSL" : "SelectiveModeRequested");
                 if (_selective == null) throw new InvalidOperationException("Selective mode is unavailable.");
                 configuration = _selective.Write(request);
                 _log.Write("SelectiveConfigurationWritten");
+            }
+            if (exclude != null)
+            {
+                _log.Write("ExcludeModeRequested");
+                if (_selective == null) throw new InvalidOperationException("Exclude mode is unavailable.");
+                var written = _selective.WriteExclude(exclude);
+                foreach (var _ in written.Skipped) _log.Write("ExcludedProgramMissing");
+                configuration = written.Path;
+                _log.Write("ExcludeConfigurationWritten");
+            }
+            if (configuration != ConfigurationPath && _checker != null)
+            {
+                // A derived file that sing-box rejects must not replace the working mode.
+                _checker.Check(configuration);
+                _log.Write("ConfigurationChecked");
             }
 
             _log.Write("SingBoxStarting");
@@ -112,13 +150,33 @@ public sealed class TunnelServiceLifecycle
             _started = true;
             _log.Write("SingBoxStarted", child.Id);
             _monitorTask = MonitorAsync(child);
+            TryStatus(status => status.Clear());
         }
         catch (Exception ex)
         {
             _log.Write("Exception", exception: ex);
+            TryStatus(status => status.WriteStartError(StartErrorMessage(ex)));
             throw;
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>Short text for the GUI. Only messages written by this program or by sing-box check.</summary>
+    internal static string StartErrorMessage(Exception ex) => ex switch
+    {
+        ConfigurationCheckException => "Конфигурация не прошла проверку sing-box: " + ex.Message,
+        InvalidDataException => ex.Message,
+        ArgumentException => "Служба получила неверный список программ.",
+        FileNotFoundException => "Не найден sing-box или C:\\sing-box\\config.json.",
+        InvalidOperationException when ex.Message.StartsWith("Another sing-box") => "Уже запущен другой sing-box.",
+        _ => "Ошибка запуска службы (" + ex.GetType().Name + ")."
+    };
+
+    private void TryStatus(Action<IServiceStatusFile> action)
+    {
+        if (_status == null) return;
+        try { action(_status); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _log.Write("StatusFileFailed", exception: ex); }
     }
 
     private async Task MonitorAsync(IManagedChild child)

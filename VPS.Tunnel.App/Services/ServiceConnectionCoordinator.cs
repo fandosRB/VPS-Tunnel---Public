@@ -13,6 +13,10 @@ public sealed class ServiceConnectionCoordinator
     private readonly SafeLog _log;
     private readonly IServiceModeStore _modes;
     private readonly IExitIpStore _exitIps;
+    private readonly IServiceErrorSource _serviceErrors;
+    private StartRecord? _lastStart;
+
+    private sealed record StartRecord(TunnelMode Mode, string[]? Arguments);
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _poll;
     private readonly SemaphoreSlim _operation = new(1, 1);
@@ -23,11 +27,12 @@ public sealed class ServiceConnectionCoordinator
     public ServiceConnectionCoordinator(IServiceControl service, IConnectionInfoService connection,
         INetworkStatusService network, ISessionStatisticsService session, SafeLog log,
         TimeSpan? timeout = null, TimeSpan? poll = null, IServiceModeStore? modes = null,
-        IExitIpStore? exitIps = null)
+        IExitIpStore? exitIps = null, IServiceErrorSource? serviceErrors = null)
     {
         _service = service; _connection = connection; _network = network; _session = session; _log = log;
         _modes = modes ?? new InMemoryServiceModeStore();
         _exitIps = exitIps ?? new InMemoryExitIpStore();
+        _serviceErrors = serviceErrors ?? new NoServiceErrors();
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
         _poll = poll ?? TimeSpan.FromMilliseconds(400);
     }
@@ -64,25 +69,44 @@ public sealed class ServiceConnectionCoordinator
     /// Brings the service up in TUNNEL or SELECTIVE. A running service in the other mode, or
     /// with <paramref name="restart"/> set (changed SELECTIVE list), is stopped first.
     /// </summary>
-    public async Task<ConnectionSnapshot> ConnectAsync(TunnelMode mode, SelectiveRequest? selective,
+    public Task<ConnectionSnapshot> ConnectAsync(TunnelMode mode, SelectiveRequest? selective,
         bool restart, CancellationToken token)
     {
         if (mode is not (TunnelMode.Tunnel or TunnelMode.Selective)) throw new ArgumentOutOfRangeException(nameof(mode));
+        if (mode == TunnelMode.Tunnel) return ConnectCoreAsync(mode, null, restart, token);
         var selected = new SelectiveRequest(SelectiveApplications.Normalize(selective?.Applications),
             selective?.IncludeWsl == true);
-        if (mode == TunnelMode.Selective && selected.IsEmpty)
-            return Error("SELECTIVE_EMPTY", "Добавьте программу или включите WSL для режима SELECTIVE.");
+        return selected.IsEmpty
+            ? Task.FromResult(Error("SELECTIVE_EMPTY", "Добавьте программу или включите WSL для режима SELECTIVE."))
+            : ConnectCoreAsync(mode, SelectiveApplications.ToStartArguments(selected), restart, token);
+    }
+
+    /// <summary>EXCLUDE: everything through the VPS except the listed programs, which go direct.</summary>
+    public Task<ConnectionSnapshot> ConnectExcludeAsync(ExcludeRequest? exclude, bool restart, CancellationToken token)
+    {
+        var entries = ExcludedApplications.Normalize(exclude?.Entries);
+        return entries.Count == 0
+            ? Task.FromResult(Error("EXCLUDE_EMPTY", "Добавьте хотя бы одну программу-исключение."))
+            : ConnectCoreAsync(TunnelMode.Exclude, ExcludedApplications.ToStartArguments(new ExcludeRequest(entries)), restart, token);
+    }
+
+    private async Task<ConnectionSnapshot> ConnectCoreAsync(TunnelMode mode, string[]? arguments,
+        bool restart, CancellationToken token)
+    {
         Interlocked.Increment(ref _networkGeneration);
         await _operation.WaitAsync(token);
-        var serviceSeen = false;
-        var processSeen = false;
-        var tunSeen = false;
         try
         {
-            _log.Write(mode == TunnelMode.Selective ? "mode requested: selective" : "mode requested: tunnel");
+            _log.Write("mode requested: " + mode.ToString().ToLowerInvariant());
             var status = _service.Query();
             if (status.State == ManagedServiceState.Missing) { ServiceAvailable = false; return Error("SERVICE_NOT_INSTALLED", SetupRequired); }
-            if (status.State != ManagedServiceState.Stopped && (restart || _modes.ActiveServiceMode != mode))
+            var previousMode = _modes.ActiveServiceMode;
+            // A service that was running in a known mode can be put back if the new one fails.
+            // TUNNEL needs no arguments, so it can be restored even after this GUI was restarted.
+            var previousArguments = status.State != ManagedServiceState.Running ? null
+                : _lastStart?.Mode == previousMode ? _lastStart
+                : previousMode == TunnelMode.Tunnel ? new StartRecord(TunnelMode.Tunnel, null) : null;
+            if (status.State != ManagedServiceState.Stopped && (restart || previousMode != mode))
             {
                 _log.Write("service restart requested");
                 _session.Reset();
@@ -90,14 +114,59 @@ public sealed class ServiceConnectionCoordinator
                 if (status.State == ManagedServiceState.Running) _service.Stop();
                 if (!await WaitForStoppedAsync(token))
                     return Error("SERVICE_RESTART_TIMEOUT", "Не удалось перезапустить туннель за 30 секунд.");
-                status = _service.Query();
             }
+
+            var result = await StartAndConfirmAsync(mode, arguments, token);
+            if (result.State != ConnectionState.Error) return result;
+
+            var reason = _serviceErrors.ReadLastStartError();
+            if (previousArguments != null && previousArguments.Mode != TunnelMode.Direct)
+            {
+                _log.Write("restoring previous mode: " + previousArguments.Mode.ToString().ToLowerInvariant());
+                if (_service.Query().State != ManagedServiceState.Stopped)
+                {
+                    _service.Stop();
+                    await WaitForStoppedAsync(token);
+                }
+                var restored = await StartAndConfirmAsync(previousArguments.Mode, previousArguments.Arguments, token);
+                if (restored.State != ConnectionState.Error)
+                    return _last = restored with
+                    {
+                        Notice = $"Режим {DisplayName(mode)} не включён" + (reason == null ? "." : ": " + reason) +
+                            $"\n\nВозвращён прежний режим {DisplayName(previousArguments.Mode)}."
+                    };
+            }
+            return reason == null ? result : _last = result with { Error = result.Error + "\n\nПричина: " + reason };
+        }
+        catch (ServiceControlException ex) { return ControlError(ex); }
+        catch (Win32Exception ex) { return Error("WINDOWS_API_ERROR", "Не удалось управлять службой Windows.", ex.NativeErrorCode); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { _log.Exception("tunnel operation", ex); return Error("TUNNEL_START_FAILED", "Не удалось запустить туннель."); }
+        finally { _operation.Release(); }
+    }
+
+    private static string DisplayName(TunnelMode mode) => mode switch
+    {
+        TunnelMode.Selective => "SELECTIVE",
+        TunnelMode.Exclude => "«Все, кроме выбранных»",
+        _ => "TUNNEL"
+    };
+
+    /// <summary>Starts a stopped service in <paramref name="mode"/> and waits for the process, TUN and route.</summary>
+    private async Task<ConnectionSnapshot> StartAndConfirmAsync(TunnelMode mode, string[]? arguments, CancellationToken token)
+    {
+        var serviceSeen = false;
+        var processSeen = false;
+        var tunSeen = false;
+        try
+        {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(_timeout);
+            var status = _service.Query();
             if (status.State == ManagedServiceState.Stopped)
             {
                 _modes.SetActiveServiceMode(mode);
-                _service.Start(mode == TunnelMode.Selective ? SelectiveApplications.ToStartArguments(selected) : null);
+                _service.Start(arguments);
                 _log.Write("service start requested");
             }
             while (true)
@@ -114,22 +183,18 @@ public sealed class ServiceConnectionCoordinator
                 if (tun && _network.HasActiveTunRoute())
                 {
                     _log.Write("tunnel technical state confirmed; pid=" + status.SingBoxPid);
+                    _lastStart = new(mode, arguments);
                     return (await ActiveTunnelAsync(status.SingBoxPid, token))!;
                 }
                 await Task.Delay(_poll, timeout.Token);
             }
         }
-        catch (ServiceControlException ex) { return ControlError(ex); }
-        catch (Win32Exception ex) { return Error("WINDOWS_API_ERROR", "Не удалось управлять службой Windows.", ex.NativeErrorCode); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
             var code = !serviceSeen ? "SERVICE_TIMEOUT" : !processSeen ? "PROCESS_TIMEOUT" :
                 !tunSeen ? "TUN_TIMEOUT" : "ROUTE_TIMEOUT";
             return Error(code, "Туннель не подтвердился за 30 секунд.");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        { _log.Exception("tunnel operation", ex); return Error("TUNNEL_START_FAILED", "Не удалось запустить туннель."); }
-        finally { _operation.Release(); }
     }
 
     public async Task<ConnectionSnapshot> DisconnectAsync(CancellationToken token)
@@ -191,7 +256,7 @@ public sealed class ServiceConnectionCoordinator
         {
             if (requestGeneration != Interlocked.Read(ref _networkGeneration)) return null;
             if (_last.State is not (ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict or
-                ConnectionState.Selective)) return null;
+                ConnectionState.Selective or ConnectionState.Exclude)) return null;
             var status = _service.Query();
             if (status.State != ManagedServiceState.Running || status.SingBoxPid == null ||
                 !_network.HasLikelyTunInterface() || !_network.HasActiveTunRoute())
@@ -213,7 +278,7 @@ public sealed class ServiceConnectionCoordinator
         if (requestGeneration != null && requestGeneration != Interlocked.Read(ref _networkGeneration))
             return null;
         if (_last.State is not (ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict or
-                ConnectionState.Selective))
+                ConnectionState.Selective or ConnectionState.Exclude))
             _session.Begin(DateTimeOffset.UtcNow, _network.ReadReliableTunTraffic());
         if (_modes.ActiveServiceMode == TunnelMode.Selective)
         {
@@ -234,7 +299,9 @@ public sealed class ServiceConnectionCoordinator
         var warning = conflict ? "Обнаружен другой VPN или конфликт маршрутизации. Внешний IP отличается от IP сервера." :
             ip == null ? "IP не удалось проверить" : null;
         _log.Write(conflict ? "tunnel active: route conflict" : ip == null ? "tunnel active: ip unavailable" : "tunnel active: expected exit ip");
-        return _last = new(conflict ? ConnectionState.TunnelActiveRouteConflict : ConnectionState.Tunnel,
+        // EXCLUDE sends this GUI through the VPS like TUNNEL, so the exit IP is checked the same way.
+        var active = _modes.ActiveServiceMode == TunnelMode.Exclude ? ConnectionState.Exclude : ConnectionState.Tunnel;
+        return _last = new(conflict ? ConnectionState.TunnelActiveRouteConflict : active,
             ip, country, warning, started, null, pid);
     }
 

@@ -5,7 +5,8 @@ using Microsoft.Extensions.Logging;
 using VPS.Tunnel.Service;
 
 // SCM is the only control plane. A plain start runs the fixed sing-box configuration;
-// a start with "--selective <app.exe>..." runs the derived SELECTIVE configuration.
+// "--selective <app.exe>..." runs the derived SELECTIVE configuration and
+// "--exclude <path or app.exe>..." the derived EXCLUDE configuration (all but those programs via the VPS).
 using var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options => options.ServiceName = "VpsTunnelService")
     .ConfigureLogging(logging => logging.ClearProviders())
@@ -17,6 +18,8 @@ using var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<IChildProcessRunner, SingBoxProcessRunner>();
         services.AddSingleton<ServiceStartArguments>();
         services.AddSingleton<ISelectiveConfigurationWriter, SelectiveConfigurationWriter>();
+        services.AddSingleton<IConfigurationChecker, SingBoxConfigurationChecker>();
+        services.AddSingleton<IServiceStatusFile, ServiceStatusFile>();
         // Replaces the default lifetime registered by UseWindowsService to see StartService arguments.
         if (WindowsServiceHelpers.IsWindowsService())
             services.AddSingleton<IHostLifetime, ArgumentCapturingServiceLifetime>();
@@ -26,7 +29,9 @@ using var host = Host.CreateDefaultBuilder(args)
             provider.GetRequiredService<IServiceEventLog>(),
             provider.GetRequiredService<IHostApplicationLifetime>().StopApplication,
             arguments: provider.GetRequiredService<ServiceStartArguments>(),
-            selective: provider.GetRequiredService<ISelectiveConfigurationWriter>()));
+            selective: provider.GetRequiredService<ISelectiveConfigurationWriter>(),
+            checker: provider.GetRequiredService<IConfigurationChecker>(),
+            status: provider.GetRequiredService<IServiceStatusFile>()));
         services.AddHostedService<TunnelHostedService>();
     })
     .Build();

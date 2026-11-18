@@ -87,11 +87,19 @@ public sealed class AppSettingsCoordinator : IServiceModeStore, IExitIpStore
         _store.Save(Settings);
     }
 
+    public ExcludeRequest ExcludeRequest => new(Settings.ExcludedApplications);
+
+    public void SetExcluded(IEnumerable<string> entries)
+    {
+        Settings.ExcludedApplications = ExcludedApplications.Normalize(entries);
+        _store.Save(Settings);
+    }
+
     public TunnelMode ActiveServiceMode => Settings.ActiveServiceMode;
 
     public void SetActiveServiceMode(TunnelMode mode)
     {
-        if (mode is not (TunnelMode.Tunnel or TunnelMode.Selective)) throw new ArgumentOutOfRangeException(nameof(mode));
+        if (mode is not (TunnelMode.Tunnel or TunnelMode.Selective or TunnelMode.Exclude)) throw new ArgumentOutOfRangeException(nameof(mode));
         if (Settings.ActiveServiceMode == mode) return;
         Settings.ActiveServiceMode = mode;
         _store.Save(Settings);

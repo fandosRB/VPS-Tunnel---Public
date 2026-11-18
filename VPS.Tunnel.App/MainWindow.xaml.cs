@@ -42,12 +42,13 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
             (Application.Current as App)?.IsAutomaticLaunch == true);
         _connection = new ServiceConnectionCoordinator(new WindowsServiceControl(), _connectionInfo,
             new NetworkStatusService(), new SessionStatisticsService(), _log, modes: _settingsCoordinator,
-            exitIps: _settingsCoordinator);
+            exitIps: _settingsCoordinator, serviceErrors: new ServiceStatusErrorSource());
         InitializeComponent();
         WindowsStartupCheck.IsChecked = _settings.LaunchWithWindows;
         MinimizedCheck.IsChecked = _settings.LaunchMinimized;
         StartupComboBox.SelectedIndex = (int)_settings.StartupMode;
         UpdateSelectiveAppsText();
+        UpdateExcludeAppsText();
         UpdateServerText();
         WindowsStartupCheck.Checked += StartWithWindowsChanged;
         WindowsStartupCheck.Unchecked += StartWithWindowsChanged;
@@ -146,6 +147,8 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
             await SwitchModeAsync(TunnelMode.Tunnel, notifyError: true, restart: true);
         else if (_state == ConnectionState.Selective)
             await SwitchModeAsync(TunnelMode.Selective, notifyError: true, restart: true);
+        else if (_state == ConnectionState.Exclude)
+            await SwitchModeAsync(TunnelMode.Exclude, notifyError: true, restart: true);
         return true;
     }
 
@@ -228,15 +231,70 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
             : "Через VPS: " + string.Join(", ", names);
     }
 
+    private async void Exclude_Click(object sender, RoutedEventArgs e) => await ExcludeRequestedAsync();
+
+    private async Task ExcludeRequestedAsync()
+    {
+        if (_busy) return;
+        if (_settings.ExcludedApplications.Count == 0 && !EditExcludedApplications()) return;
+        if (_settings.ExcludedApplications.Count == 0) return;
+        await SwitchModeAsync(TunnelMode.Exclude, notifyError: true);
+    }
+
+    private async void ExcludeApps_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || !EditExcludedApplications() || _state != ConnectionState.Exclude) return;
+        // An active EXCLUDE session picks up the new list only after a service restart.
+        if (_settings.ExcludedApplications.Count > 0)
+            await SwitchModeAsync(TunnelMode.Exclude, notifyError: true, restart: true);
+        else
+            await SwitchModeAsync(TunnelMode.Tunnel, notifyError: true);
+    }
+
+    /// <summary>Returns true when the user saved a changed exclusion list.</summary>
+    private bool EditExcludedApplications()
+    {
+        var editor = new SelectiveAppsWindow(_settings.ExcludedApplications) { Owner = IsVisible ? this : null };
+        if (editor.ShowDialog() != true) return false;
+        var updated = editor.ExcludedEntries;
+        if (updated.SequenceEqual(_settings.ExcludedApplications, StringComparer.OrdinalIgnoreCase)) return false;
+        TryUpdateSettings(() => _settingsCoordinator.SetExcluded(updated));
+        UpdateExcludeAppsText();
+        return true;
+    }
+
+    private void UpdateExcludeAppsText()
+    {
+        var entries = _settings.ExcludedApplications;
+        ExcludeAppsText.Text = entries.Count == 0 ? "Выбрать" : $"Изменить ({entries.Count})";
+        ExcludeButton.ToolTip = entries.Count == 0
+            ? "Всё через VPS, кроме программ-исключений"
+            : "Напрямую, мимо VPS: " + string.Join(", ", entries.Select(entry => System.IO.Path.GetFileName(entry)));
+    }
+
+    /// <summary>Paths that no longer exist are skipped by the service; say so before switching.</summary>
+    private void WarnAboutMissingExclusions()
+    {
+        var missing = _settings.ExcludedApplications
+            .Where(entry => ExcludedApplications.IsPath(entry) && !File.Exists(entry)).ToList();
+        if (missing.Count == 0) return;
+        MessageBox.Show(this, "Эти программы не найдены и будут пропущены:\n\n" + string.Join("\n", missing),
+            "VPS Tunnel", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
     private async Task SwitchModeAsync(TunnelMode mode, bool notifyError, bool rememberSelection = true,
         bool restart = false)
     {
         if (mode != TunnelMode.Direct && !ConnectionConfigWriter.IsConfigured(_settings) &&
             !await EditConnectionAsync(welcome: true)) return;
+        if (mode == TunnelMode.Exclude && notifyError && !_busy) WarnAboutMissingExclusions();
         var snapshot = await RunOperationAsync(
-            () => mode == TunnelMode.Direct
-                ? _connection.DisconnectAsync(_lifetime.Token)
-                : _connection.ConnectAsync(mode, _settingsCoordinator.SelectiveRequest, restart, _lifetime.Token),
+            () => mode switch
+            {
+                TunnelMode.Direct => _connection.DisconnectAsync(_lifetime.Token),
+                TunnelMode.Exclude => _connection.ConnectExcludeAsync(_settingsCoordinator.ExcludeRequest, restart, _lifetime.Token),
+                _ => _connection.ConnectAsync(mode, _settingsCoordinator.SelectiveRequest, restart, _lifetime.Token)
+            },
             notifyError, mode == TunnelMode.Direct ? ConnectionState.Disconnecting : ConnectionState.Connecting);
         if (rememberSelection && snapshot != null && StartupBehavior.ShouldRememberSelection(mode, snapshot.State))
             TryUpdateSettings(() => _settingsCoordinator.RememberMode(mode));
@@ -248,7 +306,7 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         if (_busy) return null;
         _busy = true;
         DirectButton.IsEnabled = TunnelButton.IsEnabled = SelectiveButton.IsEnabled = SelectiveAppsButton.IsEnabled =
-            ConnectionSettingsButton.IsEnabled = false;
+            ExcludeButton.IsEnabled = ExcludeAppsButton.IsEnabled = ConnectionSettingsButton.IsEnabled = false;
         RenderState(new(pending, null, null, null, null, null, null));
         try
         {
@@ -258,6 +316,8 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
             if (notifyError && snapshot.State == ConnectionState.Error)
                 MessageBox.Show(this, snapshot.Error ?? "Не удалось подтвердить соединение.",
                     "VPS Tunnel", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (notifyError && snapshot.Notice != null)
+                MessageBox.Show(this, snapshot.Notice, "VPS Tunnel", MessageBoxButton.OK, MessageBoxImage.Warning);
             if (notifyError && snapshot.State == ConnectionState.TunnelActiveRouteConflict)
                 MessageBox.Show(this, snapshot.Error ?? "Обнаружен другой VPN или конфликт маршрутизации.",
                     "VPS Tunnel", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -275,7 +335,7 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         {
             _busy = false;
             DirectButton.IsEnabled = TunnelButton.IsEnabled = SelectiveButton.IsEnabled = SelectiveAppsButton.IsEnabled =
-                ConnectionSettingsButton.IsEnabled = true;
+                ExcludeButton.IsEnabled = ExcludeAppsButton.IsEnabled = ConnectionSettingsButton.IsEnabled = true;
         }
         return null;
     }
@@ -286,12 +346,14 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         _state = snapshot.State;
         bool tunnel = snapshot.State is ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict;
         bool selective = snapshot.State == ConnectionState.Selective;
-        bool protectedState = tunnel || selective;
+        bool exclude = snapshot.State == ConnectionState.Exclude;
+        bool protectedState = tunnel || selective || exclude;
         bool direct = snapshot.State == ConnectionState.Direct;
         StatusTitle.Text = snapshot.State switch
         {
             ConnectionState.Tunnel => "TUNNEL",
             ConnectionState.Selective => "SELECTIVE",
+            ConnectionState.Exclude => "EXCLUDE",
             ConnectionState.TunnelActiveRouteConflict => "ТУННЕЛЬ АКТИВЕН",
             ConnectionState.Direct => "DIRECT",
             ConnectionState.Connecting => "ПОДКЛЮЧЕНИЕ",
@@ -305,6 +367,7 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         {
             ConnectionState.Tunnel => "Защищённое соединение",
             ConnectionState.Selective => "Выбранные программы через VPS",
+            ConnectionState.Exclude => "Всё через VPS, кроме исключений",
             ConnectionState.TunnelActiveRouteConflict => "Конфликт VPN или маршрута",
             ConnectionState.Direct => "Прямое соединение",
             ConnectionState.Error => "Ошибка подключения",
@@ -313,7 +376,7 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         StatusBlock.ToolTip = snapshot.Error;
         SetupButton.Visibility = _connection.ServiceAvailable ? Visibility.Collapsed : Visibility.Visible;
         _tray?.SetState(snapshot.State);
-        StatusIcon.Data = (Geometry)FindResource(selective ? "AppsIcon" : tunnel ? "ShieldIcon" : "GlobeIcon");
+        StatusIcon.Data = (Geometry)FindResource(selective ? "AppsIcon" : exclude ? "ExcludeIcon" : tunnel ? "ShieldIcon" : "GlobeIcon");
         StatusIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty,
             protectedState ? "AccentBrush" : "NeutralBrush");
         StatusRing.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty,
@@ -333,6 +396,10 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         SelectiveButton.SetResourceReference(BorderBrushProperty, selective ? "AccentBrush" : "BorderBrush");
         SelectiveButton.SetResourceReference(ForegroundProperty, selective ? "WhiteBrush" : "TextBrush");
         SelectiveHint.SetResourceReference(TextBlock.ForegroundProperty, selective ? "WhiteBrush" : "SecondaryBrush");
+        ExcludeButton.SetResourceReference(BackgroundProperty, exclude ? "AccentBrush" : "CardBrush");
+        ExcludeButton.SetResourceReference(BorderBrushProperty, exclude ? "AccentBrush" : "BorderBrush");
+        ExcludeButton.SetResourceReference(ForegroundProperty, exclude ? "WhiteBrush" : "TextBrush");
+        ExcludeHint.SetResourceReference(TextBlock.ForegroundProperty, exclude ? "WhiteBrush" : "SecondaryBrush");
         IpValue.Text = snapshot.PublicIPv4 ?? (snapshot.State is ConnectionState.Connecting or ConnectionState.Disconnecting
             ? "Проверка..." : "Не удалось проверить");
         CountryValue.Text = snapshot.Country ?? "—";
@@ -356,7 +423,8 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
     private void RenderStatistics()
     {
         var stats = _connection.CurrentStatistics();
-        var active = _state is ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict or ConnectionState.Selective;
+        var active = _state is ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict or
+            ConnectionState.Selective or ConnectionState.Exclude;
         ElapsedValue.Text = active ? stats.Elapsed.ToString(@"hh\:mm\:ss") : "00:00:00";
         DownloadValue.Text = active && stats.Traffic != null ? FormatBytes(stats.Traffic.ReceivedBytes) : "—";
         UploadValue.Text = active && stats.Traffic != null ? FormatBytes(stats.Traffic.SentBytes) : "—";
@@ -493,6 +561,7 @@ public partial class MainWindow : Window, IStartupWindow, ITrayWindow
         _tray.DirectRequested += async (_, _) => await SwitchModeAsync(TunnelMode.Direct, notifyError: true);
         _tray.TunnelRequested += async (_, _) => await SwitchModeAsync(TunnelMode.Tunnel, notifyError: true);
         _tray.SelectiveRequested += async (_, _) => await SelectiveRequestedAsync();
+        _tray.ExcludeRequested += async (_, _) => await ExcludeRequestedAsync();
         _tray.ExitRequested += (_, _) => { _exitRequested = true; Close(); };
         _tray.Initialize();
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))

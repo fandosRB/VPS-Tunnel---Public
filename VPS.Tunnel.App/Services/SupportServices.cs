@@ -29,7 +29,8 @@ public sealed class AppSettingsService : IAppSettingsService
             if (!Enum.IsDefined(loaded.Theme)) loaded.Theme = ThemePreference.System;
             if (!Enum.IsDefined(loaded.StartupMode)) loaded.StartupMode = StartupMode.Direct;
             if (!Enum.IsDefined(loaded.LastSelectedMode)) loaded.LastSelectedMode = TunnelMode.Direct;
-            if (loaded.ActiveServiceMode != TunnelMode.Selective) loaded.ActiveServiceMode = TunnelMode.Tunnel;
+            if (loaded.ActiveServiceMode is not (TunnelMode.Selective or TunnelMode.Exclude)) loaded.ActiveServiceMode = TunnelMode.Tunnel;
+            loaded.ExcludedApplications = ExcludedApplications.Normalize(loaded.ExcludedApplications);
             loaded.SelectiveApplications = SelectiveApplications.Normalize(loaded.SelectiveApplications);
             return loaded;
         }

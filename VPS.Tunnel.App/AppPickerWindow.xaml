@@ -44,7 +44,7 @@
          <Image Source="{Binding Icon}" Width="24" Height="24" Margin="0,0,10,0" RenderOptions.BitmapScalingMode="HighQuality"/>
          <StackPanel VerticalAlignment="Center">
           <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
-          <TextBlock Text="{Binding ExecutableName}" Style="{StaticResource SecondaryTextStyle}" FontSize="11"/>
+          <TextBlock Text="{Binding Detail}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Detail}" Style="{StaticResource SecondaryTextStyle}" FontSize="11"/>
          </StackPanel>
         </StackPanel>
        </CheckBox>

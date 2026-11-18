@@ -7,6 +7,7 @@ public sealed record TrayIconState(string FileName, string DisplayName)
     public static readonly TrayIconState Direct = new("tray-direct.ico", "DIRECT");
     public static readonly TrayIconState Tunnel = new("tray-tunnel.ico", "TUNNEL");
     public static readonly TrayIconState Selective = new("tray-tunnel.ico", "SELECTIVE");
+    public static readonly TrayIconState Exclude = new("tray-tunnel.ico", "EXCLUDE");
     public static readonly TrayIconState Connecting = new("tray-connecting.ico", "ПОДКЛЮЧЕНИЕ");
     public static readonly TrayIconState Error = new("tray-error.ico", "ОШИБКА");
 
@@ -14,6 +15,7 @@ public sealed record TrayIconState(string FileName, string DisplayName)
     {
         ConnectionState.Tunnel or ConnectionState.TunnelActiveRouteConflict => Tunnel,
         ConnectionState.Selective => Selective,
+        ConnectionState.Exclude => Exclude,
         ConnectionState.Connecting or ConnectionState.Disconnecting => Connecting,
         ConnectionState.Error => Error,
         _ => Direct

@@ -13,7 +13,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\VPS.Tunnel.App\Icons\vps-tunnel.ico</ApplicationIcon>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <!-- build-installer.ps1 publishes the GUI and the service from source into these folders. -->
     <PayloadGuiDir>$(MSBuildThisFileDirectory)..\stage\gui</PayloadGuiDir>
     <PayloadServiceDir>$(MSBuildThisFileDirectory)..\stage\service</PayloadServiceDir>

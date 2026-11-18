@@ -70,9 +70,9 @@ public static class SelectiveConfigBuilder
     public const string WslSourceRange = "172.16.0.0/12";
     private static readonly HashSet<string> NonProxyTypes = new(StringComparer.OrdinalIgnoreCase)
         { "direct", "block", "dns" };
-    private static readonly JsonDocumentOptions ParseOptions = new()
+    internal static readonly JsonDocumentOptions ParseOptions = new()
         { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
-    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
+    internal static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
     public static string Build(string baseConfiguration, SelectiveRequest request)
     {
@@ -127,7 +127,7 @@ public static class SelectiveConfigBuilder
         return root.ToJsonString(WriteOptions);
     }
 
-    private static string FindProxyTag(JsonArray outbounds, JsonObject route)
+    internal static string FindProxyTag(JsonArray outbounds, JsonObject route)
     {
         // In the verified TUNNEL configuration everything ends up at route.final, so that is the proxy.
         var final = route["final"]?.GetValue<string>();
@@ -141,7 +141,7 @@ public static class SelectiveConfigBuilder
         throw new InvalidDataException("Proxy outbound not found.");
     }
 
-    private static string FindOrAddDirectTag(JsonArray outbounds)
+    internal static string FindOrAddDirectTag(JsonArray outbounds)
     {
         var existing = outbounds.OfType<JsonObject>()
             .FirstOrDefault(outbound => string.Equals(Type(outbound), "direct", StringComparison.OrdinalIgnoreCase) &&
@@ -171,9 +171,9 @@ public static class SelectiveConfigBuilder
                 }
     }
 
-    private static string? Tag(JsonObject outbound) =>
+    internal static string? Tag(JsonObject outbound) =>
         outbound["tag"] is JsonValue value && value.TryGetValue<string>(out var tag) ? tag : null;
 
-    private static string Type(JsonObject outbound) =>
+    internal static string Type(JsonObject outbound) =>
         outbound["type"] is JsonValue value && value.TryGetValue<string>(out var type) ? type : "";
 }

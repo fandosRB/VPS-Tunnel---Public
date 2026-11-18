@@ -42,6 +42,36 @@ public sealed class InMemoryExitIpStore(string? expected = null) : IExitIpStore
     public void LearnExitIp(string ip) => ExpectedExitIp ??= ip;
 }
 
+public interface IServiceErrorSource
+{
+    /// <summary>Short reason the service wrote when its last start failed, or null.</summary>
+    string? ReadLastStartError();
+}
+
+public sealed class NoServiceErrors : IServiceErrorSource
+{
+    public string? ReadLastStartError() => null;
+}
+
+/// <summary>Reads %ProgramData%\VPS Tunnel\Status\last-error.txt, written by the service.</summary>
+public sealed class ServiceStatusErrorSource : IServiceErrorSource
+{
+    private static readonly string ErrorPath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VPS Tunnel", "Status", "last-error.txt");
+
+    public string? ReadLastStartError()
+    {
+        try
+        {
+            var info = new System.IO.FileInfo(ErrorPath);
+            if (!info.Exists || info.Length > 4096) return null;
+            var text = System.IO.File.ReadAllText(ErrorPath).Trim();
+            return text.Length == 0 ? null : text;
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { return null; }
+    }
+}
+
 public sealed class ServiceControlException(string code, string api, int windowsError)
     : Win32Exception(windowsError, $"{code} at {api} (Win32 {windowsError})")
 {

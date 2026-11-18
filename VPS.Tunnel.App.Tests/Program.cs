@@ -305,6 +305,77 @@ await Check("connection settings keep only the display name and exit IP", async 
     finally { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
     await Task.CompletedTask;
 });
+await Check("EXCLUDE starts with the exclusion list and checks the exit IP like TUNNEL", async () =>
+{
+    var f = new Fixture();
+    var result = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest([TestNet.ExcludedApp, "Telegram.exe"]), false, default);
+    Assert(result.State == ConnectionState.Exclude && result.PublicIPv4 == TestNet.ExitIp &&
+        f.Service.LastArguments!.SequenceEqual(["--exclude", TestNet.ExcludedApp, "Telegram.exe"]) &&
+        f.Modes.ActiveServiceMode == TunnelMode.Exclude);
+    f.Info.Ip = "203.0.113.44";
+    Assert((await f.Coordinator.RefreshIpAsync(default))?.State == ConnectionState.TunnelActiveRouteConflict);
+});
+await Check("EXCLUDE with an empty list never starts the service", async () =>
+{
+    var f = new Fixture();
+    var result = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest(["", "relative\\x.exe"]), false, default);
+    Assert(result.State == ConnectionState.Error && f.Service.StartCount == 0 && f.Service.QueryCount == 0);
+});
+await Check("TUNNEL -> EXCLUDE -> TUNNEL restarts the service each time", async () =>
+{
+    var f = new Fixture();
+    await f.Coordinator.ConnectAsync(default);
+    var exclude = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest([TestNet.ExcludedApp]), false, default);
+    var tunnel = await f.Coordinator.ConnectAsync(default);
+    Assert(exclude.State == ConnectionState.Exclude && tunnel.State == ConnectionState.Tunnel &&
+        f.Service.StartCount == 3 && f.Service.StopCount == 2 && f.Service.LastArguments == null);
+});
+await Check("failed EXCLUDE restores the previous TUNNEL and explains why", async () =>
+{
+    var f = new Fixture();
+    await f.Coordinator.ConnectAsync(default);
+    f.Service.ExitsOnStart = args => args?.Contains("--exclude") == true;
+    f.Errors.Error = "Конфигурация не прошла проверку sing-box: bad rule";
+    var result = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest([TestNet.ExcludedApp]), false, default);
+    Assert(result.State == ConnectionState.Tunnel && f.Service.LastArguments == null &&
+        f.Modes.ActiveServiceMode == TunnelMode.Tunnel &&
+        result.Notice!.Contains("bad rule") && result.Notice.Contains("TUNNEL"));
+});
+await Check("failed EXCLUDE restores the previous SELECTIVE with its list", async () =>
+{
+    var f = new Fixture();
+    await f.Coordinator.ConnectAsync(TunnelMode.Selective, Sel("chrome.exe"), false, default);
+    f.Service.ExitsOnStart = args => args?.Contains("--exclude") == true;
+    var result = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest([TestNet.ExcludedApp]), false, default);
+    Assert(result.State == ConnectionState.Selective && result.Notice != null &&
+        f.Service.LastArguments!.SequenceEqual(["--selective", "chrome.exe"]));
+});
+await Check("failed EXCLUDE from DIRECT stays an error with the service reason", async () =>
+{
+    var f = new Fixture();
+    f.Service.ExitsOnStart = _ => true;
+    f.Errors.Error = "Ни одна программа из списка исключений не найдена на диске.";
+    var result = await f.Coordinator.ConnectExcludeAsync(new ExcludeRequest([TestNet.ExcludedApp]), false, default);
+    Assert(result.State == ConnectionState.Error && result.Error!.Contains("не найдена на диске") &&
+        f.Service.StartCount == 1);
+});
+await Check("EXCLUDE settings persist and are sanitized", async () =>
+{
+    var path = Path.Combine(Path.GetTempPath(), "VpsTunnelExclude-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new AppSettingsService(path);
+        await store.SaveAsync(new AppSettings { StartupMode = StartupMode.Exclude, ActiveServiceMode = TunnelMode.Exclude,
+            ExcludedApplications = [TestNet.ExcludedApp, TestNet.ExcludedApp.ToUpperInvariant(), "..\\evil.exe", "app.exe"] }, default);
+        var loaded = store.Load();
+        Assert(loaded.ActiveServiceMode == TunnelMode.Exclude &&
+            StartupBehavior.TargetMode(loaded) == TunnelMode.Exclude &&
+            StartupBehavior.ShouldRememberSelection(TunnelMode.Exclude, ConnectionState.Exclude) &&
+            TrayIconState.FromConnectionState(ConnectionState.Exclude) == TrayIconState.Exclude &&
+            loaded.ExcludedApplications.SequenceEqual([TestNet.ExcludedApp, "app.exe"]));
+    }
+    finally { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+});
 await Check("startup DIRECT", async () =>
 {
     var f = new Fixture();
@@ -627,19 +698,27 @@ sealed class Fixture
     public FakeInfo Info { get; } = new();
     public InMemoryServiceModeStore Modes { get; } = new();
     public InMemoryExitIpStore ExitIps { get; set; } = new(TestNet.ExitIp);
+    public FakeServiceErrors Errors { get; } = new();
     public SafeLog Log { get; } = new(Path.Combine(Path.GetTempPath(), "VpsTunnelTestLogs"));
     public ServiceConnectionCoordinator Coordinator { get; }
     public Fixture()
     {
         Network.Service = Service;
         Coordinator = new(Service, Info, Network, new SessionStatisticsService(), Log,
-            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(5), Modes, ExitIps);
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(5), Modes, ExitIps, Errors);
     }
+}
+
+sealed class FakeServiceErrors : IServiceErrorSource
+{
+    public string? Error;
+    public string? ReadLastStartError() => Error;
 }
 
 static class TestNet
 {
     public const string ExitIp = "198.51.100.7";
+    public const string ExcludedApp = @"C:\Program Files\Example App\app.exe";
 }
 
 sealed class FakeService : IServiceControl
@@ -647,6 +726,8 @@ sealed class FakeService : IServiceControl
     public ManagedServiceState State = ManagedServiceState.Stopped;
     public int StartCount, StopCount, QueryCount;
     public IReadOnlyList<string>? LastArguments;
+    /// <summary>Simulates a service that exits right after start (e.g. sing-box check failed).</summary>
+    public Func<IReadOnlyList<string>?, bool>? ExitsOnStart;
     public bool QueryGranted = true, StartGranted = true, StopGranted = true;
     public bool DenyStart, FailStartApi, DenyScm, Stuck;
     public ManagedServiceStatus Query()
@@ -663,6 +744,7 @@ sealed class FakeService : IServiceControl
         if (DenyStart || !StartGranted) throw new ServiceControlException("SERVICE_ACCESS_DENIED", "OpenServiceW", 5);
         if (FailStartApi) throw new ServiceControlException("SERVICE_START_FAILED", "StartServiceW", 5);
         StartCount++;
+        if (ExitsOnStart?.Invoke(arguments) == true) { State = ManagedServiceState.Stopped; return; }
         if (!Stuck) State = ManagedServiceState.Running;
         else State = ManagedServiceState.StartPending;
     }

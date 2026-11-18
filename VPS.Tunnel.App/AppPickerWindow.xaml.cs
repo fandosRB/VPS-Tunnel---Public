@@ -12,8 +12,12 @@ public partial class AppPickerWindow : Window
     private ICollectionView? _view;
 
     /// <param name="running">true: running programs with a window; false: installed programs.</param>
-    public AppPickerWindow(bool running, IEnumerable<string> alreadyAdded)
+    private readonly bool _usePaths;
+
+    /// <param name="usePaths">Return full paths (EXCLUDE list) instead of executable names (SELECTIVE list).</param>
+    public AppPickerWindow(bool running, IEnumerable<string> alreadyAdded, bool usePaths = false)
     {
+        _usePaths = usePaths;
         InitializeComponent();
         _alreadyAdded = new(alreadyAdded, StringComparer.OrdinalIgnoreCase);
         HeaderText.Text = running ? "Запущенные программы" : "Установленные программы";
@@ -24,7 +28,7 @@ public partial class AppPickerWindow : Window
             try
             {
                 var apps = await Task.Run(() => running ? AppCatalog.Running() : AppCatalog.Installed());
-                apps.RemoveAll(app => _alreadyAdded.Contains(app.ExecutableName));
+                apps.RemoveAll(app => _alreadyAdded.Contains(_usePaths ? app.Path ?? app.ExecutableName : app.ExecutableName));
                 AppList.ItemsSource = apps;
                 _view = CollectionViewSource.GetDefaultView(apps);
                 _view.Filter = Matches;
@@ -44,7 +48,7 @@ public partial class AppPickerWindow : Window
         var query = SearchBox.Text.Trim();
         return query.Length == 0 || item is AppChoice app &&
             (app.DisplayName.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-             app.ExecutableName.Contains(query, StringComparison.OrdinalIgnoreCase));
+             app.Detail.Contains(query, StringComparison.OrdinalIgnoreCase));
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -65,7 +69,7 @@ public partial class AppPickerWindow : Window
     private void Add_Click(object sender, RoutedEventArgs e)
     {
         Selected = (AppList.ItemsSource as IEnumerable<AppChoice> ?? [])
-            .Where(app => app.IsSelected).Select(app => app.ExecutableName).ToList();
+            .Where(app => app.IsSelected).Select(app => _usePaths ? app.Path ?? app.ExecutableName : app.ExecutableName).ToList();
         DialogResult = true;
     }
 }

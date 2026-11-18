@@ -25,6 +25,7 @@ public sealed class TrayService : IDisposable
     public event EventHandler? DirectRequested;
     public event EventHandler? TunnelRequested;
     public event EventHandler? SelectiveRequested;
+    public event EventHandler? ExcludeRequested;
     public event EventHandler? ExitRequested;
 
     public TrayService(Window window) => _window = window;
@@ -92,6 +93,7 @@ public sealed class TrayService : IDisposable
             _ = AppendMenu(menu, MfSeparator, 0, null);
             _ = AppendMenu(menu, MfString, 2, "DIRECT");
             _ = AppendMenu(menu, MfString, 5, "SELECTIVE");
+            _ = AppendMenu(menu, MfString, 6, "EXCLUDE (всё, кроме выбранных)");
             _ = AppendMenu(menu, MfString, 3, "TUNNEL");
             _ = AppendMenu(menu, MfSeparator, 0, null);
             _ = AppendMenu(menu, MfString, 4, "Выход");
@@ -106,6 +108,7 @@ public sealed class TrayService : IDisposable
                 case 3: TunnelRequested?.Invoke(this, EventArgs.Empty); break;
                 case 4: ExitRequested?.Invoke(this, EventArgs.Empty); break;
                 case 5: SelectiveRequested?.Invoke(this, EventArgs.Empty); break;
+                case 6: ExcludeRequested?.Invoke(this, EventArgs.Empty); break;
             }
         }
         finally { _ = DestroyMenu(menu); }

@@ -2,7 +2,7 @@
 
 ## Version
 
-v1.1.1 FINAL / VERIFIED — SELECTIVE mode, per-user connection settings, single installer (Apps registration, shortcuts, in-place update).
+v1.2.0 — adds EXCLUDE ("все, кроме выбранных"). v1.1.1 FINAL / VERIFIED — SELECTIVE mode, per-user connection settings, single installer (Apps registration, shortcuts, in-place update).
 
 v1.1.1 differs from v1.1.0 only in the installer.
 
@@ -18,7 +18,7 @@ v1.1 adds SELECTIVE (verified on the production PC, including WSL) and connectio
 - Core: shared models (`VPS.Tunnel.Core`)
 - Tunnel engine: sing-box 1.14.1
 - Protocol: VLESS + Reality, XTLS Vision
-- Modes: DIRECT, TUNNEL, SELECTIVE
+- Modes: DIRECT, TUNNEL, SELECTIVE, EXCLUDE ("все, кроме выбранных", v1.2)
 
 The GUI communicates with `VpsTunnelService` through Windows Service Control Manager. Normal GUI operation does not require elevation after setup.
 
@@ -64,6 +64,18 @@ DIRECT means the service is stopped and the TUN adapter is absent. TUNNEL means 
 - The unelevated GUI writes the file through an elevated copy of itself (`VPS-Tunnel.exe --write-config <temp file>`, one UAC prompt). It accepts only its own temp file, validates it and installs `C:\sing-box\config.json` (previous one kept as `config.json.bak`) readable only by SYSTEM and Administrators.
 - `settings.json` stores only the display name and the expected exit IP — never keys. The exit IP is the server IP (resolved if a domain); for an imported config it is learned from the first verified TUNNEL. A running tunnel restarts to apply new settings.
 - On a computer without a configuration the GUI opens the settings window on first launch and does not auto-connect.
+
+## EXCLUDE mode (v1.2)
+
+Everything goes through the VPS except the listed programs, which go direct. Added for programs that lose their connection through the tunnel but work directly.
+
+- The list (`ExcludedApplications` in `settings.json`) is separate from the SELECTIVE list and stores full paths, since different programs can share an .exe name. Bare file names are accepted too. The editor offers "Из установленных", "Из запущенных" and "Файл…".
+- The GUI starts the service with `--exclude <path or name>...`. The service validates the entries, skips paths that do not exist (event `ExcludedProgramMissing`), uses the on-disk spelling of each path (sing-box compares `process_path` literally), and writes `Service\Runtime\exclude-config.json` (SYSTEM and Administrators only).
+- `ExcludeConfigBuilder` (Core) derives it from `C:\sing-box\config.json`: after the leading `sniff` / `hijack-dns` rules it inserts `{"process_path": [...], "outbound": <direct>}` and, for names, `{"process_name": [...], ...}` (no network filter, so TCP and UDP). It adds a `direct` outbound if missing, keeps `route.final` on the proxy, and sets `route.auto_detect_interface: true`. In `dns.rules` the same processes go to a `local` DNS server (added if missing). Adding that second DNS server requires `route.default_domain_resolver`; if absent, it is set to the server sing-box used before.
+- Before a derived (SELECTIVE or EXCLUDE) configuration is used, the service runs `sing-box check -c <file>`. On failure nothing is started, and the reason goes to `%ProgramData%\VPS Tunnel\Status\last-error.txt` (readable by Users, one short line, never configuration contents).
+- When a switch from a running mode fails, the GUI restores the previous mode (TUNNEL, or SELECTIVE/EXCLUDE with the list used in this GUI session) and shows the reason. The log line is `mode requested: exclude`.
+- In EXCLUDE this GUI goes through the VPS, so the exit IP is checked as in TUNNEL.
+- Limits: the broker sees the home IP; programs started by an excluded program must be added separately. On Windows most DNS lookups are made by the DNS Client service (svchost.exe), not by the program, so the DNS rule may not apply; the program's connections still go direct.
 
 ## SELECTIVE mode (v1.1)
 
